@@ -91,7 +91,7 @@ psycopg2-binary==2.9.9
 pyasn1==0.6.3
 pyasn1_modules==0.4.2
 PyAudio==0.2.14
-PyAudioWPatch==0.2.12.8
+
 pycparser==3.0
 pycryptodomex==3.23.0
 pydantic==2.12.5
