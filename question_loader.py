@@ -7,6 +7,7 @@ import pandas as pd
 
 from database import get_connection
 
+
 # ============================================================
 # CONFIGURATION
 # ============================================================
@@ -17,8 +18,10 @@ ROOT_FOLDER = Path(
     r"\Client-wise Questions"
 )
 
-
-TABLE_NAME = "interview_questions"
+# IMPORTANT:
+# Explicitly specify the public schema because the Neon database
+# contains the table as public.interview_questions.
+TABLE_NAME = "public.interview_questions"
 
 
 # Excel sheet name -> database difficulty
@@ -27,7 +30,6 @@ VALID_SHEETS = {
     "MODERATE": "moderate",
     "ADVANCED": "advanced",
 }
-
 
 
 # ============================================================
@@ -222,18 +224,8 @@ def get_domain_and_client(file_path):
     Supported structures:
 
     1. CLIENT / DOMAIN / FILE.xlsx
-       Example:
-           Analog Device/
-               STA/
-                   questions.xlsx
 
     2. CLIENT / FILE.xlsx
-       Example:
-           ARM/
-               ARM_PV_Combined Questions.xlsx
-
-           Microsoft/
-               Microsoft_PD & CAD_Combined questions.xlsx
     """
 
     relative_path = file_path.relative_to(ROOT_FOLDER)
@@ -288,7 +280,9 @@ def get_domain_and_client(file_path):
 
             if domain_part.endswith(suffix):
 
-                domain_part = domain_part[:-len(suffix)]
+                domain_part = domain_part[
+                    :-len(suffix)
+                ]
 
                 break
 
@@ -355,6 +349,10 @@ def upsert_question(
         question_data["question_hash"]
     )
 
+    # ========================================================
+    # UPDATE EXISTING QUESTION
+    # ========================================================
+
     if exists:
 
         query = f"""
@@ -391,6 +389,10 @@ def upsert_question(
         )
 
         return "updated"
+
+    # ========================================================
+    # INSERT NEW QUESTION
+    # ========================================================
 
     else:
 
@@ -512,6 +514,22 @@ def load_questions():
 
         print(
             "\nPostgreSQL connected successfully."
+        )
+
+        # ----------------------------------------------------
+        # Verify the table before processing Excel files
+        # ----------------------------------------------------
+
+        cursor.execute("""
+            SELECT COUNT(*)
+            FROM public.interview_questions;
+        """)
+
+        existing_count = cursor.fetchone()[0]
+
+        print(
+            "Existing questions in Neon:",
+            existing_count
         )
 
     except Exception as e:
@@ -646,9 +664,6 @@ def load_questions():
 
                     # ------------------------------------------------
                     # SAVEPOINT
-                    #
-                    # If this question fails, only this question
-                    # is rolled back.
                     # ------------------------------------------------
 
                     savepoint_name = (
@@ -737,23 +752,41 @@ def load_questions():
             except Exception as e:
 
                 total_errors += 1
-            
+
                 error_message = str(e)
-            
+
                 print(
                     f"ERROR processing file: {e}"
                 )
-            
+
                 failed_rows.append({
-                    "file": str(file_path),
-                    "client": source_client if "source_client" in locals() else "UNKNOWN",
-                    "domain": domain if "domain" in locals() else "UNKNOWN",
-                    "sheet": "FILE LEVEL",
-                    "row": "-",
-                    "question": "-",
-                    "error": error_message,
+
+                    "file":
+                        str(file_path),
+
+                    "client":
+                        source_client
+                        if "source_client" in locals()
+                        else "UNKNOWN",
+
+                    "domain":
+                        domain
+                        if "domain" in locals()
+                        else "UNKNOWN",
+
+                    "sheet":
+                        "FILE LEVEL",
+
+                    "row":
+                        "-",
+
+                    "question":
+                        "-",
+
+                    "error":
+                        error_message,
                 })
-            
+
                 connection.rollback()
 
     except Exception as e:
@@ -866,14 +899,14 @@ def load_questions():
             print(
                 "\nNo errors. Import completed successfully."
             )
-    
+
         else:
-    
+
             print(
                 f"\nWARNING: {total_errors} error(s) occurred, "
                 "but no failure details were captured."
             )
-    
+
         print("=" * 70)
 
 
