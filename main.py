@@ -25,37 +25,12 @@ from llm import (
 # AUDIO SERVICE
 # =========================================================
 
-try:
-    from audio_service import (
-        start_audio,
-        stop_audio,
-        get_transcript
-    )
-except ModuleNotFoundError as e:
-    print("Audio service unavailable:", str(e))
-
-    def start_audio():
-        return {
-            "success": False,
-            "running": False,
-            "message": "Server-side audio capture is unavailable on this platform."
-        }
-
-    def stop_audio():
-        return {
-            "success": True,
-            "running": False,
-            "message": "Audio service is not running."
-        }
-
-    def get_transcript():
-        return {
-            "success": False,
-            "running": False,
-            "transcript": "",
-            "final_transcript": "",
-            "error": "Server-side audio capture is unavailable on this platform."
-        }
+from audio_service import (
+    start_audio,
+    stop_audio,
+    get_transcript,
+    add_audio_chunk
+)
 
 
 app = FastAPI(title="IntelliHire API")
@@ -2651,6 +2626,25 @@ def api_audio_start():
 
     return result
 
+# ============================================================
+# AUDIO CHUNK
+# ============================================================
+
+
+@app.post("/api/audio/chunk")
+async def api_audio_chunk(
+    audio: UploadFile = File(...)
+):
+
+    audio_data = await audio.read()
+
+    result = add_audio_chunk(
+        audio_data
+    )
+
+    return result
+
+
 
 # ============================================================
 # AUDIO STOP
@@ -2686,6 +2680,11 @@ def api_audio_transcript():
     )
 
     return result
+
+
+
+
+
 
 
 # ============================================================
