@@ -74,7 +74,7 @@ networkx==3.4.2
 numba==0.65.0
 numpy==2.2.6
 Office365-REST-Python-Client==2.6.2
-onnxruntime==1.23.2
+onnxruntime==1.24.1
 openai==3.3.1
 openai-whisper==20250625
 openpyxl==3.1.5
