@@ -2,11 +2,8 @@ import os
 import json
 import queue
 import threading
-import time
 
-import pyaudiowpatch as pyaudio
 import websocket
-
 from dotenv import load_dotenv
 
 
@@ -20,308 +17,48 @@ DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 
 if not DEEPGRAM_API_KEY:
     raise RuntimeError(
-        "DEEPGRAM_API_KEY is missing from .env"
+        "DEEPGRAM_API_KEY is missing from environment variables."
     )
 
 
 # =========================================================
-# SETTINGS
+# STATE
 # =========================================================
 
-CHUNK_SIZE = 1024
+_audio_running = False
+
+_audio_transcript = ""
+_final_transcript = ""
+_audio_error = ""
+
+_audio_lock = threading.Lock()
 
 _audio_queue = queue.Queue(maxsize=200)
 
 _stop_event = threading.Event()
 
-_audio_thread = None
-_sender_thread = None
-_receiver_thread = None
-
-_audio_running = False
-
-_audio_lock = threading.Lock()
-
-_audio_transcript = ""
-_final_transcript = ""
-
-_audio_error = ""
-
 _ws = None
-_pyaudio = None
-_stream = None
+
+_audio_thread = None
 
 
 # =========================================================
-# FIND WINDOWS WASAPI LOOPBACK
+# DEEPGRAM CONNECTION
 # =========================================================
 
-def find_wasapi_loopback_device():
-
-    print()
-    print("=" * 70)
-    print("SEARCHING FOR WINDOWS SPEAKER WASAPI LOOPBACK")
-    print("=" * 70)
-
-    p = pyaudio.PyAudio()
-
-    try:
-
-        # -------------------------------------------------
-        # Get WASAPI information
-        # -------------------------------------------------
-
-        wasapi_info = p.get_host_api_info_by_type(
-            pyaudio.paWASAPI
-        )
-
-        print(
-            "WASAPI Host API index:",
-            wasapi_info["index"]
-        )
-
-        # -------------------------------------------------
-        # Get Windows default speaker
-        # -------------------------------------------------
-
-        default_speaker = p.get_device_info_by_index(
-            wasapi_info["defaultOutputDevice"]
-        )
-
-        print(
-            "Default Windows speaker:",
-            default_speaker["name"]
-        )
-
-        print()
-        print(
-            "Searching for corresponding WASAPI loopback..."
-        )
-        print()
-
-        selected = None
-
-        # -------------------------------------------------
-        # If default device itself is loopback
-        # -------------------------------------------------
-
-        if default_speaker.get(
-            "isLoopbackDevice",
-            False
-        ):
-
-            selected = default_speaker
-
-        else:
-
-            # -------------------------------------------------
-            # PyAudioWPatch loopback devices
-            # -------------------------------------------------
-
-            for loopback in (
-                p.get_loopback_device_info_generator()
-            ):
-
-                print(
-                    f"[{loopback['index']}] "
-                    f"{loopback['name']} | "
-                    f"Inputs: "
-                    f"{loopback['maxInputChannels']} | "
-                    f"Outputs: "
-                    f"{loopback['maxOutputChannels']}"
-                )
-
-                if (
-                    default_speaker["name"]
-                    in loopback["name"]
-                ):
-
-                    selected = loopback
-                    break
-
-        # -------------------------------------------------
-        # Fallback: first usable loopback
-        # -------------------------------------------------
-
-        if selected is None:
-
-            print()
-            print(
-                "Exact default speaker loopback "
-                "not found."
-            )
-
-            print(
-                "Searching for any usable loopback..."
-            )
-
-            for loopback in (
-                p.get_loopback_device_info_generator()
-            ):
-
-                if int(
-                    loopback.get(
-                        "maxInputChannels",
-                        0
-                    )
-                ) > 0:
-
-                    selected = loopback
-
-                    print(
-                        "Using fallback loopback:",
-                        loopback["name"]
-                    )
-
-                    break
-
-        # -------------------------------------------------
-        # No device
-        # -------------------------------------------------
-
-        if selected is None:
-
-            raise RuntimeError(
-                "Could not find a suitable "
-                "Windows WASAPI speaker loopback device."
-            )
-
-        # -------------------------------------------------
-        # Validate channels
-        # -------------------------------------------------
-
-        input_channels = int(
-            selected.get(
-                "maxInputChannels",
-                0
-            )
-        )
-
-        if input_channels <= 0:
-
-            raise RuntimeError(
-                "Selected WASAPI loopback has "
-                "no input channels."
-            )
-
-        # -------------------------------------------------
-        # Print selected device
-        # -------------------------------------------------
-
-        print()
-        print("=" * 70)
-        print("SELECTED WASAPI LOOPBACK DEVICE")
-        print("=" * 70)
-
-        print(
-            "Name:",
-            selected["name"]
-        )
-
-        print(
-            "Index:",
-            selected["index"]
-        )
-
-        print(
-            "Sample rate:",
-            selected["defaultSampleRate"]
-        )
-
-        print(
-            "Input channels:",
-            selected["maxInputChannels"]
-        )
-
-        print("=" * 70)
-        print()
-
-        return p, selected
-
-    except Exception:
-
-        try:
-            p.terminate()
-        except Exception:
-            pass
-
-        raise
-
-
-# =========================================================
-# AUDIO CALLBACK
-# =========================================================
-
-def audio_callback(
-    in_data,
-    frame_count,
-    time_info,
-    status
-):
-
-    if status:
-
-        print(
-            "Audio status:",
-            status
-        )
-
-    if (
-        in_data
-        and not _stop_event.is_set()
-    ):
-
-        try:
-
-            _audio_queue.put_nowait(
-                in_data
-            )
-
-        except queue.Full:
-
-            try:
-                _audio_queue.get_nowait()
-            except queue.Empty:
-                pass
-
-            try:
-                _audio_queue.put_nowait(
-                    in_data
-                )
-            except queue.Full:
-                pass
-
-    return (
-        None,
-        pyaudio.paContinue
-    )
-
-
-# =========================================================
-# CONNECT TO DEEPGRAM
-# =========================================================
-
-def connect_deepgram(
-    sample_rate,
-    channels
-):
+def connect_deepgram():
 
     url = (
         "wss://api.deepgram.com/v1/listen"
         "?model=nova-3"
         "&language=en-IN"
-        "&encoding=linear16"
-        f"&sample_rate={sample_rate}"
-        f"&channels={channels}"
         "&interim_results=true"
         "&smart_format=true"
         "&punctuate=true"
     )
 
     print()
-    print(
-        "Connecting to Deepgram..."
-    )
+    print("Connecting to Deepgram...")
 
     ws = websocket.create_connection(
         url,
@@ -332,15 +69,13 @@ def connect_deepgram(
         timeout=None
     )
 
-    print(
-        "Deepgram connected."
-    )
+    print("Deepgram connected.")
 
     return ws
 
 
 # =========================================================
-# RECEIVE TRANSCRIPT FROM DEEPGRAM
+# RECEIVE TRANSCRIPT
 # =========================================================
 
 def receive_from_deepgram(ws):
@@ -353,30 +88,39 @@ def receive_from_deepgram(ws):
     print("=" * 70)
     print("DEEPGRAM TRANSCRIPTION ACTIVE")
     print("=" * 70)
-    print()
 
     try:
 
         while not _stop_event.is_set():
 
-            message = ws.recv()
+            try:
+                message = ws.recv()
+
+            except Exception as e:
+
+                if not _stop_event.is_set():
+
+                    _audio_error = repr(e)
+
+                    print(
+                        "Deepgram receive error:",
+                        repr(e)
+                    )
+
+                break
 
             if not message:
                 continue
 
             try:
 
-                data = json.loads(
-                    message
-                )
+                data = json.loads(message)
 
             except Exception:
 
                 continue
 
-            channel = data.get(
-                "channel"
-            )
+            channel = data.get("channel")
 
             if not channel:
                 continue
@@ -403,10 +147,6 @@ def receive_from_deepgram(ws):
                 "is_final",
                 False
             )
-
-            # -------------------------------------------------
-            # Update transcript
-            # -------------------------------------------------
 
             with _audio_lock:
 
@@ -440,25 +180,11 @@ def receive_from_deepgram(ws):
 
                         _audio_transcript = text
 
-            # -------------------------------------------------
-            # Terminal output
-            # -------------------------------------------------
-
             if is_final:
 
-                print()
                 print(
                     "CANDIDATE:",
                     _audio_transcript
-                )
-
-            else:
-
-                print(
-                    "\rCANDIDATE:",
-                    _audio_transcript,
-                    end="",
-                    flush=True
                 )
 
     except Exception as e:
@@ -467,9 +193,8 @@ def receive_from_deepgram(ws):
 
             _audio_error = repr(e)
 
-            print()
             print(
-                "Deepgram receive error:",
+                "Deepgram receiver error:",
                 repr(e)
             )
 
@@ -480,12 +205,10 @@ def receive_from_deepgram(ws):
 
 def send_audio_to_deepgram(ws):
 
-    print(
-        "Starting Deepgram audio sender..."
-    )
+    global _audio_error
 
     print(
-        "Sending candidate audio to Deepgram..."
+        "Starting Deepgram audio sender..."
     )
 
     try:
@@ -494,10 +217,8 @@ def send_audio_to_deepgram(ws):
 
             try:
 
-                audio_data = (
-                    _audio_queue.get(
-                        timeout=0.5
-                    )
+                audio_data = _audio_queue.get(
+                    timeout=0.5
                 )
 
             except queue.Empty:
@@ -546,195 +267,54 @@ def send_audio_to_deepgram(ws):
 def audio_worker():
 
     global _audio_running
-    global _pyaudio
-    global _stream
     global _ws
-    global _sender_thread
-    global _receiver_thread
-    global _audio_error
 
     try:
 
-        # =================================================
-        # FIND WASAPI LOOPBACK
-        # =================================================
+        _ws = connect_deepgram()
 
-        _pyaudio, device = (
-            find_wasapi_loopback_device()
-        )
-
-        device_index = int(
-            device["index"]
-        )
-
-        sample_rate = int(
-            device["defaultSampleRate"]
-        )
-
-        channels = int(
-            device["maxInputChannels"]
-        )
-
-        if channels <= 0:
-
-            raise RuntimeError(
-                "WASAPI loopback has no input channels."
-            )
-
-        # =================================================
-        # OPENING INFORMATION
-        # =================================================
-
-        print()
-        print("=" * 70)
-        print("OPENING AUDIO CAPTURE")
-        print("=" * 70)
-
-        print(
-            "Device       :",
-            device["name"]
-        )
-
-        print(
-            "Device index :",
-            device_index
-        )
-
-        print(
-            "Sample rate  :",
-            sample_rate
-        )
-
-        print(
-            "Channels     :",
-            channels
-        )
-
-        print("=" * 70)
-        print()
-
-        # =================================================
-        # OPEN WASAPI AUDIO STREAM
-        # =================================================
-
-        print(
-            "Opening WASAPI audio stream..."
-        )
-
-        _stream = _pyaudio.open(
-
-            format=pyaudio.paInt16,
-
-            channels=channels,
-
-            rate=sample_rate,
-
-            input=True,
-
-            input_device_index=device_index,
-
-            frames_per_buffer=CHUNK_SIZE,
-
-            stream_callback=audio_callback
-        )
-
-        _stream.start_stream()
-
-        print()
-        print("=" * 70)
-        print("WASAPI AUDIO CAPTURE ACTIVE")
-        print("Listening for candidate voice...")
-        print("=" * 70)
-        print()
-
-        # =================================================
-        # CONNECT TO DEEPGRAM
-        # =================================================
-
-        _ws = connect_deepgram(
-            sample_rate,
-            channels
-        )
-
-        # =================================================
-        # START DEEPGRAM RECEIVER
-        # =================================================
-
-        _receiver_thread = threading.Thread(
-
+        receiver_thread = threading.Thread(
             target=receive_from_deepgram,
-
             args=(_ws,),
-
             daemon=True
         )
 
-        _receiver_thread.start()
+        receiver_thread.start()
 
-        # =================================================
-        # START DEEPGRAM SENDER
-        # =================================================
-
-        _sender_thread = threading.Thread(
-
+        sender_thread = threading.Thread(
             target=send_audio_to_deepgram,
-
             args=(_ws,),
-
             daemon=True
         )
 
-        _sender_thread.start()
-
-        # =================================================
-        # KEEP AUDIO RUNNING
-        # =================================================
+        sender_thread.start()
 
         print(
-            "Audio capture is running."
+            "Browser audio service is ready."
         )
-
-        print(
-            "Waiting for candidate speech..."
-        )
-
-        print()
 
         while not _stop_event.is_set():
 
-            time.sleep(0.2)
-
-            if (
-                _stream is None
-                or not _stream.is_active()
-            ):
-
-                break
+            _stop_event.wait(0.2)
 
     except Exception as e:
 
-        _audio_error = repr(e)
+        if not _stop_event.is_set():
 
-        print()
-        print("=" * 70)
-        print("WASAPI AUDIO ERROR")
-        print("=" * 70)
-        print(
-            repr(e)
-        )
-        print("=" * 70)
-        print()
+            global _audio_error
+
+            _audio_error = repr(e)
+
+            print(
+                "Audio worker error:",
+                repr(e)
+            )
 
     finally:
 
         _audio_running = False
 
         cleanup_audio()
-
-        print()
-        print(
-            "Candidate audio capture stopped."
-        )
 
 
 # =========================================================
@@ -743,39 +323,7 @@ def audio_worker():
 
 def cleanup_audio():
 
-    global _stream
     global _ws
-    global _pyaudio
-
-    # -----------------------------------------------------
-    # AUDIO STREAM
-    # -----------------------------------------------------
-
-    if _stream is not None:
-
-        try:
-
-            if _stream.is_active():
-
-                _stream.stop_stream()
-
-        except Exception:
-
-            pass
-
-        try:
-
-            _stream.close()
-
-        except Exception:
-
-            pass
-
-        _stream = None
-
-    # -----------------------------------------------------
-    # DEEPGRAM WEBSOCKET
-    # -----------------------------------------------------
 
     if _ws is not None:
 
@@ -803,25 +351,9 @@ def cleanup_audio():
 
         _ws = None
 
-    # -----------------------------------------------------
-    # PYAUDIO
-    # -----------------------------------------------------
-
-    if _pyaudio is not None:
-
-        try:
-
-            _pyaudio.terminate()
-
-        except Exception:
-
-            pass
-
-        _pyaudio = None
-
 
 # =========================================================
-# START AUDIO SERVICE
+# START AUDIO
 # =========================================================
 
 def start_audio():
@@ -839,16 +371,13 @@ def start_audio():
             return {
                 "success": True,
                 "running": True,
-                "message": (
-                    "Candidate audio "
-                    "already running."
-                ),
+                "message": "Candidate audio already running.",
                 "transcript": _audio_transcript
             }
 
-        # -------------------------------------------------
-        # CLEAR OLD AUDIO
-        # -------------------------------------------------
+        _audio_transcript = ""
+        _final_transcript = ""
+        _audio_error = ""
 
         while not _audio_queue.empty():
 
@@ -860,28 +389,12 @@ def start_audio():
 
                 break
 
-        # -------------------------------------------------
-        # RESET TRANSCRIPT
-        # -------------------------------------------------
-
-        _audio_transcript = ""
-
-        _final_transcript = ""
-
-        _audio_error = ""
-
         _stop_event.clear()
 
         _audio_running = True
 
-    # -----------------------------------------------------
-    # START BACKGROUND AUDIO WORKER
-    # -----------------------------------------------------
-
     _audio_thread = threading.Thread(
-
         target=audio_worker,
-
         daemon=True
     )
 
@@ -890,15 +403,64 @@ def start_audio():
     return {
         "success": True,
         "running": True,
-        "message": (
-            "WASAPI candidate audio started."
-        ),
+        "message": "Browser audio service started.",
         "transcript": ""
     }
 
 
 # =========================================================
-# STOP AUDIO SERVICE
+# RECEIVE BROWSER AUDIO CHUNK
+# =========================================================
+
+def add_audio_chunk(audio_data: bytes):
+
+    if not audio_data:
+
+        return {
+            "success": False,
+            "message": "Empty audio chunk."
+        }
+
+    if not _audio_running:
+
+        return {
+            "success": False,
+            "message": "Audio service is not running."
+        }
+
+    try:
+
+        _audio_queue.put_nowait(
+            audio_data
+        )
+
+    except queue.Full:
+
+        try:
+            _audio_queue.get_nowait()
+        except queue.Empty:
+            pass
+
+        try:
+
+            _audio_queue.put_nowait(
+                audio_data
+            )
+
+        except queue.Full:
+
+            return {
+                "success": False,
+                "message": "Audio queue is full."
+            }
+
+    return {
+        "success": True
+    }
+
+
+# =========================================================
+# STOP AUDIO
 # =========================================================
 
 def stop_audio():
@@ -915,32 +477,22 @@ def stop_audio():
 
     _audio_running = False
 
-    # -----------------------------------------------------
-    # Close Deepgram websocket so receiver doesn't
-    # remain blocked on ws.recv()
-    # -----------------------------------------------------
-
     if _ws is not None:
 
         try:
-
             _ws.close()
-
         except Exception:
-
             pass
 
     return {
         "success": True,
         "running": False,
-        "message": (
-            "Candidate audio stopped."
-        )
+        "message": "Candidate audio stopped."
     }
 
 
 # =========================================================
-# GET CURRENT TRANSCRIPT
+# GET TRANSCRIPT
 # =========================================================
 
 def get_transcript():
@@ -949,12 +501,8 @@ def get_transcript():
 
         return {
             "success": True,
-
             "running": _audio_running,
-
             "transcript": _audio_transcript,
-
             "final_transcript": _final_transcript,
-
-            "error": _audio_error,
+            "error": _audio_error
         }
