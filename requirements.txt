@@ -156,7 +156,7 @@ vosk==0.3.45
 websocket-client==1.9.0
 websockets==16.1.1
 Werkzeug==3.1.8
-WMI==1.5.1
+
 xlrd==2.0.2
 xlsxwriter==3.2.9
 yarl==1.23.0
