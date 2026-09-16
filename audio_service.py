@@ -99,14 +99,16 @@ def receive_from_deepgram(ws):
             except Exception as e:
 
                 if not _stop_event.is_set():
-
+            
                     _audio_error = repr(e)
-
+            
                     print(
                         "Deepgram receive error:",
                         repr(e)
                     )
-
+            
+                    _stop_event.set()
+            
                 break
 
             if not message:
