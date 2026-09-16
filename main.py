@@ -28,8 +28,8 @@ from llm import (
 from audio_service import (
     start_audio,
     stop_audio,
-    get_transcript,
-    add_audio_chunk
+    get_transcript
+    
 )
 
 
@@ -2626,23 +2626,7 @@ def api_audio_start():
 
     return result
 
-# ============================================================
-# AUDIO CHUNK
-# ============================================================
 
-
-@app.post("/api/audio/chunk")
-async def api_audio_chunk(
-    audio: UploadFile = File(...)
-):
-
-    audio_data = await audio.read()
-
-    result = add_audio_chunk(
-        audio_data
-    )
-
-    return result
 
 
 
