@@ -3218,3 +3218,48 @@ async def submit_report(data: dict):
             status_code=500,
             detail=str(e)
         )
+
+
+
+# =========================================================
+# DEEPGRAM TEMPORARY TOKEN
+# =========================================================
+
+@app.get("/api/deepgram-token")
+def get_deepgram_token():
+
+    import os
+    import requests
+
+    api_key = os.getenv("DEEPGRAM_API_KEY")
+
+    if not api_key:
+        raise HTTPException(
+            status_code=500,
+            detail="DEEPGRAM_API_KEY is not configured."
+        )
+
+    response = requests.post(
+        "https://api.deepgram.com/v1/auth/grant",
+        headers={
+            "Authorization": f"Token {api_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "ttl_seconds": 3600
+        },
+        timeout=10,
+    )
+
+    if not response.ok:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to create Deepgram temporary token."
+        )
+
+    data = response.json()
+
+    return {
+        "token": data["access_token"]
+    }
+
