@@ -65,3 +65,15 @@ def audio_transcript():
             "success": False,
             "error": str(e)
         }
+
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(
+        "local_audio_server:app",
+        host="127.0.0.1",
+        port=8001,
+        reload=False
+    )
