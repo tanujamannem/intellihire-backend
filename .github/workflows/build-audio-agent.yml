@@ -49,5 +49,5 @@ jobs:
       - name: Upload Windows package
         uses: actions/upload-artifact@v4
         with:
-          name: name: IntelliHireAudio-PACKAGE
+          name: IntelliHireAudio-PACKAGE
           path: IntelliHireAudio-Windows.zip
