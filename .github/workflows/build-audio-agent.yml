@@ -23,7 +23,7 @@ jobs:
           pip install PyAudioWPatch==0.2.12.8
           pip install fastapi uvicorn websocket-client python-dotenv
 
-      - name: Verify Python imports
+      - name: Verify imports
         run: |
           python -c "import pyaudiowpatch; print('PyAudioWPatch OK')"
           python -c "import fastapi; print('FastAPI OK')"
@@ -34,19 +34,20 @@ jobs:
         run: |
           pyinstaller --onefile --name IntelliHireAudio local_audio_server.py
 
-      - name: Verify executable exists
+      - name: Create package
         shell: powershell
         run: |
-          if (-not (Test-Path "dist\IntelliHireAudio.exe")) {
-            Write-Error "IntelliHireAudio.exe was not created"
-            exit 1
-          }
+          New-Item -ItemType Directory -Force -Path package
+          Copy-Item "dist\IntelliHireAudio.exe" "package\IntelliHireAudio.exe"
+          Copy-Item "start_intellihire_audio.bat" "package\start_intellihire_audio.bat"
 
-          Write-Host "IntelliHireAudio.exe created successfully"
-          Get-Item "dist\IntelliHireAudio.exe"
+      - name: Create ZIP
+        shell: powershell
+        run: |
+          Compress-Archive -Path "package\*" -DestinationPath "IntelliHireAudio-Windows.zip"
 
-      - name: Upload executable
+      - name: Upload Windows package
         uses: actions/upload-artifact@v4
         with:
-          name: IntelliHireAudio
-          path: dist/IntelliHireAudio.exe
+          name: IntelliHireAudio-Windows
+          path: IntelliHireAudio-Windows.zip
